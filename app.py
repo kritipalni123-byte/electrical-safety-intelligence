@@ -207,7 +207,7 @@ with st.sidebar:
     st.markdown('<div class="header-bar"></div>', unsafe_allow_html=True)
 
     st.markdown("#### 🔑 Groq API Key")
-    api_key = st.text_input("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", type="password", placeholder="gsk_...")
+    api_key = st.text_input("Paste your key", type="password", placeholder="gsk_...")
 
     st.markdown("#### 🏭 Companies to Track")
     selected_companies = st.multiselect("Select competitors", DEFAULT_COMPANIES, default=DEFAULT_COMPANIES[:4])
