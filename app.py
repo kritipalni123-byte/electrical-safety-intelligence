@@ -9,6 +9,9 @@ import time
 import json
 from difflib import SequenceMatcher
 import logging
+import random
+import requests
+from bs4 import BeautifulSoup
 
 # ── Logging (mirrors KEC architecture) ───────────────────────────
 logging.basicConfig(level=logging.INFO,
@@ -913,32 +916,134 @@ def classify_llm(articles, api_key):
 # ── NEWS FETCH PIPELINE ──────────────────────────────────────────
 # ══════════════════════════════════════════════════════════════════
 
-def fetch_google_news(query, days_back=30):
-    """Fetch from Google News RSS. Append 'India' only if not already present.
-    If days_back is None → no time filter, fetch all available articles."""
-    iq  = f"{query} India" if "india" not in query.lower() else query
-    url = (f"https://news.google.com/rss/search?"
-           f"q={urllib.parse.quote(iq)}&hl=en-IN&gl=IN&ceid=IN:en")
-    try:
-        feed = feedparser.parse(url)
-    except Exception:
-        return []
-    # None = no time limit; otherwise apply cutoff
-    cutoff = None if days_back is None else datetime.now() - timedelta(days=days_back)
-    out = []
-    for e in feed.entries:
-        try:    pub = datetime(*e.published_parsed[:6])
-        except: pub = datetime.now()
-        if cutoff is None or pub >= cutoff:
-            out.append({
-                "title":   e.title,
-                "link":    e.link,
-                "published": pub,
-                "source":  e.get("source",{}).get("title","Unknown"),
-                "summary": e.get("summary","")[:500],
-                "query":   query,
+def fetch_google_news(query, days_back=30, max_retries=3):
+    """
+    Fetch from Google News RSS with KEC-grade robustness:
+
+    Improvements over previous version (per KEC news_scraper.py patterns):
+    1. requests.get() for HTTP-level status checking — catches 429, 404, 503
+       before feedparser even tries to parse
+    2. raise_for_status() handles all 4xx/5xx errors explicitly
+    3. feed.version + feed.entries check — catches malformed/empty feeds
+       (fixes the 'object has no attribute status' error pattern from KEC)
+    4. when:{n}d appended to RSS URL — server-side date filter (faster,
+       fewer irrelevant results vs client-side cutoff only)
+    5. BeautifulSoup source extraction from description HTML — more reliable
+       than feedparser's source dict (mirrors KEC's source extraction)
+    6. Random jitter delay between retries (KEC: random.uniform pattern)
+    7. Per-query keyword match check — only keep articles that actually
+       mention the query term (KEC: if (k not in t) and (k not in s))
+    """
+    iq = f"{query} India" if "india" not in query.lower() else query
+
+    # Build URL — add when:Nd for server-side date filtering (KEC pattern)
+    if days_back is not None:
+        encoded = urllib.parse.quote(f"{iq} when:{int(days_back)}d")
+    else:
+        encoded = urllib.parse.quote(iq)
+    url = f"https://news.google.com/rss/search?q={encoded}&hl=en-IN&gl=IN&ceid=IN:en"
+
+    for attempt in range(max_retries):
+        try:
+            # ── Step 1: HTTP-level fetch with status checking (KEC pattern) ──
+            response = requests.get(url, timeout=15, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0"
             })
-    return out
+
+            # Handle rate limit immediately — log and abort (KEC pattern)
+            if response.status_code == 429:
+                logging.error(f"Rate limit (429) for query: {query[:50]}. Waiting 60s...")
+                time.sleep(60)
+                return []
+
+            # Raise for all other 4xx/5xx (KEC: raise_for_status pattern)
+            response.raise_for_status()
+
+            # ── Step 2: Parse feed and validate (KEC feed.version check) ──
+            feed = feedparser.parse(response.content)
+
+            # KEC pattern: check feed.version AND feed.entries before accessing
+            if not feed.version and not feed.entries:
+                logging.warning(f"Malformed/empty feed for query: {query[:50]}. Skipping.")
+                return []
+
+            if not feed.entries:
+                logging.warning(f"Zero entries for query: {query[:50]}. Skipping.")
+                return []
+
+            # ── Step 3: Parse entries ──────────────────────────────────────
+            # Client-side cutoff as secondary filter (in case server filter misses some)
+            cutoff = None if days_back is None else datetime.now() - timedelta(days=days_back)
+            q_lower = query.lower()
+            out = []
+
+            for e in feed.entries:
+                title = e.get("title", "")
+                link  = e.get("link",  "")
+
+                # KEC pattern: per-keyword match check
+                # Only keep if query term appears in title or source
+                t_lower = title.lower()
+
+                # Extract source from description HTML (KEC BeautifulSoup pattern)
+                source = ""
+                desc = e.get("description", "") or e.get("summary", "")
+                if desc:
+                    try:
+                        soup = BeautifulSoup(desc, "html.parser")
+                        font_tag = soup.find("font")
+                        if font_tag:
+                            source = font_tag.text.strip()
+                    except Exception:
+                        pass
+                if not source:
+                    source = e.get("source", {}).get("title", "Unknown")
+
+                s_lower = source.lower()
+
+                # KEC keyword relevance gate: skip if query not in title or source
+                # Use first 3 words of query for flexible matching
+                query_words = q_lower.split()[:3]
+                query_short = " ".join(query_words)
+                if query_short not in t_lower and query_short not in s_lower:
+                    # Also try first word only for very short matches
+                    if query_words[0] not in t_lower and query_words[0] not in s_lower:
+                        continue
+
+                # Date filter
+                try:    pub = datetime(*e.published_parsed[:6])
+                except: pub = datetime.now()
+                if cutoff is not None and pub < cutoff:
+                    continue
+
+                out.append({
+                    "title":     title,
+                    "link":      link,
+                    "published": pub,
+                    "source":    source,
+                    "summary":   e.get("summary", "")[:500],
+                    "query":     query,
+                })
+
+            logging.info(f"Fetched {len(out)} articles for: {query[:50]}")
+            return out
+
+        except requests.exceptions.Timeout:
+            wait = random.uniform(5, 10) + attempt * 8
+            logging.warning(f"Attempt {attempt+1}/{max_retries}: Timeout for '{query[:40]}'. Waiting {wait:.1f}s...")
+            time.sleep(wait)
+
+        except requests.exceptions.RequestException as e:
+            wait = random.uniform(3, 8) + attempt * 5
+            logging.error(f"Attempt {attempt+1}/{max_retries}: Network error for '{query[:40]}': {e}. Waiting {wait:.1f}s...")
+            time.sleep(wait)
+
+        except Exception as e:
+            logging.critical(f"Unexpected error fetching '{query[:40]}': {e}")
+            return []
+
+    logging.critical(f"All {max_retries} attempts failed for query: {query[:50]}")
+    return []
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_all_news(queries_tuple, days_back, api_key, w_kw, w_comp, w_intent):
@@ -946,7 +1051,8 @@ def fetch_all_news(queries_tuple, days_back, api_key, w_kw, w_comp, w_intent):
     raw = []
     for q in queries_tuple:
         raw.extend(fetch_google_news(q, days_back))
-        time.sleep(0.12)
+        # KEC pattern: random jitter to avoid Google throttling
+        time.sleep(random.uniform(0.5, 1.5))
 
     # ── Step 2: Title-exact dedup first (fast)
     seen_titles = set()
@@ -1265,19 +1371,46 @@ if fetch_btn or "intel_data" in st.session_state:
 
             # Export
             st.markdown("---")
-            e1,e2 = st.columns(2)
+            e1, e2, e3 = st.columns(3)
             ec = ["title","category","relevance","intent","intent_score","confidence",
                   "kw_score","comp_score","comp_hits","key_insight","score_breakdown",
                   "source","published","link"]
             out  = df_show[[c for c in ec if c in df_show.columns]].copy()
             full = df[[c for c in ec if c in df.columns]].copy()
-            for d in [out, full]:
+
+            # KEC pattern: Sheet2-equivalent — competitor-filtered export
+            # Only rows where at least one competitor was detected
+            comp_only = df[
+                df["comp_hits"].apply(lambda x: isinstance(x, list) and len(x) > 0)
+            ][[c for c in ec if c in df.columns]].copy()
+
+            for d in [out, full, comp_only]:
                 if "published" in d.columns:
                     d["published"] = d["published"].dt.strftime("%Y-%m-%d")
-            with e1: st.download_button("⬇️ Filtered CSV", out.to_csv(index=False),
-                        f"intel_{datetime.now().strftime('%Y%m%d')}.csv","text/csv")
-            with e2: st.download_button("⬇️ Full CSV", full.to_csv(index=False),
-                        f"intel_full_{datetime.now().strftime('%Y%m%d')}.csv","text/csv")
+
+            with e1:
+                st.download_button(
+                    "⬇️ Filtered CSV",
+                    out.to_csv(index=False),
+                    f"intel_{datetime.now().strftime('%Y%m%d')}.csv",
+                    "text/csv"
+                )
+            with e2:
+                st.download_button(
+                    "⬇️ Full CSV",
+                    full.to_csv(index=False),
+                    f"intel_full_{datetime.now().strftime('%Y%m%d')}.csv",
+                    "text/csv"
+                )
+            with e3:
+                # Mirrors KEC's Sheet2: competitor-linked articles only
+                st.download_button(
+                    f"⬇️ Competitor CSV ({len(comp_only)})",
+                    comp_only.to_csv(index=False),
+                    f"intel_competitors_{datetime.now().strftime('%Y%m%d')}.csv",
+                    "text/csv",
+                    help="Only articles where a competitor was detected (mirrors KEC Sheet2 pattern)"
+                )
 
         # ═══════════════════════════════
         # TAB 2 — COMPETITORS
