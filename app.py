@@ -8,6 +8,11 @@ import urllib.parse
 import time
 import json
 from difflib import SequenceMatcher
+import logging
+
+# ── Logging (mirrors KEC architecture) ───────────────────────────
+logging.basicConfig(level=logging.INFO,
+                    format="%(asctime)s - %(levelname)s - %(message)s")
 
 # ══════════════════════════════════════════════════════════════════
 # PAGE CONFIG
@@ -418,6 +423,61 @@ ALWAYS_BLOCK = [
     "ieee xplore","sciencedirect","peer-reviewed",
 ]
 
+
+# ══════════════════════════════════════════════════════════════════
+# ── SYSTEM PROMPTS (structured constants, per KEC architecture) ──
+# ══════════════════════════════════════════════════════════════════
+
+SYSTEM_INTENT_PROMPT = """
+You are a senior market intelligence analyst for an electrical safety PPE manufacturer in India.
+Products tracked: electrical insulating gloves, rubber insulating mats, arc flash suits.
+Competitors: Honeywell, Salisbury, CATU, Novax, Ansell, DPL, MN Rubber, Jayco.
+Geography focus: INDIA market only.
+
+TASK
+Given the article title and summary, return a JSON object with:
+1. intent       — EXACTLY ONE from the allowed list below
+2. confidence   — integer 0-100 reflecting how certain you are about the intent classification
+3. key_insight  — ONE sentence max 12 words, India-market focused
+
+ALLOWED INTENTS
+- Investment / Capacity Expansion  (new plant, expansion, greenfield, new facility)
+- M&A / Partnership                (acquisition, JV, merger, MoU, alliance)
+- New Product Launch               (new product, new model, launched, unveiled)
+- Technology / Innovation          (patent, R&D, new material, FR fabric, innovation)
+- Regulatory / Compliance          (BIS, IS 4770, IS 15652, IEC, QCO, DGFASLI)
+- Large Order / Contract           (contract, order, tender, procurement, supply deal)
+- General News / Mention           (all other relevant news)
+- Irrelevant                       (not about electrical safety PPE)
+
+CONFIDENCE RUBRIC
+- 80-100: Article is explicit and detailed — intent is very clear
+- 40-79:  Signals present but article is vague or incomplete
+- 0-39:   Very generic — intent is mostly a guess
+
+STRICT OUTPUT RULES
+Return ONLY valid JSON. No markdown, no preamble.
+Schema: {"intent": "...", "confidence": 75, "key_insight": "..."}
+"""
+
+SYSTEM_DEDUP_PROMPT = """
+You are a news deduplication assistant.
+Determine if two news headlines describe the EXACT SAME business event.
+
+Answer YES if:
+- Same company + same action (launch, acquisition, order win)
+- Same product or project name
+- Same financial figure or deal value
+
+Answer NO if:
+- Different companies
+- Different products or geographies
+- Different stages of the same project (announced vs completed)
+- Similar topic but different specific events
+
+Output ONLY: YES or NO
+"""
+
 # ══════════════════════════════════════════════════════════════════
 # ── KEYWORD SCORING MAP ──────────────────────────────────────────
 # ══════════════════════════════════════════════════════════════════
@@ -670,68 +730,183 @@ def sbar_html(score):
 # ── DEDUPLICATION ────────────────────────────────────────────────
 # ══════════════════════════════════════════════════════════════════
 
-def deduplicate(articles, threshold=0.82):
-    """Fuzzy title match — keep highest-scored version of duplicates."""
+def _ai_dedup_check(client, title_a, title_b):
+    """
+    AI-powered duplicate check — mirrors KEC's check_ai_duplicate().
+    Uses SYSTEM_DEDUP_PROMPT for structured, consistent decisions.
+    Only called when word-gate heuristic passes (cost-saving pattern from KEC).
+    """
+    prompt = (
+        SYSTEM_DEDUP_PROMPT +
+        f"\n\nHeadline 1: {title_a[:200]}\nHeadline 2: {title_b[:200]}\n\nAnswer:"
+    )
+    try:
+        client_g = Groq(api_key=st.session_state.get("_groq_key", ""))
+        resp = client_g.chat.completions.create(
+            model="llama3-8b-8192",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=5, temperature=0,
+        )
+        return "YES" in resp.choices[0].message.content.upper()
+    except Exception as e:
+        logging.warning(f"AI dedup check failed: {e}")
+        return False
+
+
+def deduplicate(articles, threshold=0.82, use_ai=False):
+    """
+    Two-stage deduplication (mirrors KEC architecture):
+
+    Stage 1 — Word-gate heuristic (KEC pattern):
+      If titles share fewer than 2 significant words → skip (not a duplicate).
+      Fast, zero API cost.
+
+    Stage 2 — Fuzzy ratio (our existing logic):
+      SequenceMatcher ratio ≥ threshold → duplicate.
+      Keeps highest-scored version.
+
+    Stage 3 — AI check (optional, KEC pattern, only if API key present):
+      For borderline cases where ratio is 0.65–0.82.
+    """
     unique = []
+    ai_checks = 0
+
     for art in articles:
         dup = False
+        title_a = art["title"].lower()
+        words_a = set(w for w in title_a.split() if len(w) > 3)  # ignore short words
+
         for kept in unique:
-            if SequenceMatcher(None,
-               art["title"].lower(), kept["title"].lower()).ratio() >= threshold:
+            title_b = kept["title"].lower()
+            words_b = set(w for w in title_b.split() if len(w) > 3)
+
+            # Stage 1: Word-gate — if < 2 common words, definitely not a duplicate
+            common = words_a & words_b
+            if len(common) < 2:
+                continue
+
+            # Stage 2: Fuzzy ratio
+            ratio = SequenceMatcher(None, title_a, title_b).ratio()
+            if ratio >= threshold:
                 if art.get("relevance", 0) > kept.get("relevance", 0):
                     unique.remove(kept); unique.append(art)
-                dup = True; break
+                dup = True
+                logging.info(f"Dedup (fuzzy {ratio:.2f}): '{art['title'][:50]}'")
+                break
+
+            # Stage 3: AI check for borderline (0.65–0.82) — only if key present
+            if use_ai and 0.65 <= ratio < threshold and ai_checks < 20:
+                ai_checks += 1
+                if _ai_dedup_check(None, art["title"], kept["title"]):
+                    if art.get("relevance", 0) > kept.get("relevance", 0):
+                        unique.remove(kept); unique.append(art)
+                    dup = True
+                    logging.info(f"Dedup (AI): '{art['title'][:50]}'")
+                    break
+
         if not dup:
             unique.append(art)
+
+    logging.info(f"Dedup complete: {len(articles)} → {len(unique)} articles.")
     return unique
 
 # ══════════════════════════════════════════════════════════════════
 # ── LLM INTENT ───────────────────────────────────────────────────
 # ══════════════════════════════════════════════════════════════════
 
+def _call_groq_with_retry(client, prompt, max_retries=3, initial_delay=2.0):
+    """
+    Calls Groq API with exponential backoff retry on rate-limit errors.
+    Mirrors KEC code's tenacity-style retry pattern.
+    Returns parsed dict or None on failure.
+    """
+    delay = initial_delay
+    for attempt in range(1, max_retries + 1):
+        try:
+            resp = client.chat.completions.create(
+                model="llama3-8b-8192",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=120,
+                temperature=0.1,
+            )
+            raw = resp.choices[0].message.content.strip()
+            # Strip markdown fences if present (mirrors KEC extract_json_from_text)
+            raw = raw.replace("```json", "").replace("```", "").strip()
+            return json.loads(raw)
+        except json.JSONDecodeError as e:
+            logging.warning(f"Attempt {attempt}: JSON parse error: {e}. Raw: {raw[:80]}")
+            return None
+        except Exception as e:
+            err_str = str(e).lower()
+            if "rate" in err_str or "429" in err_str:
+                if attempt < max_retries:
+                    logging.warning(f"Attempt {attempt}: Rate limit hit. Retrying in {delay:.1f}s...")
+                    time.sleep(delay)
+                    delay *= 2   # Exponential backoff
+                else:
+                    logging.error("Rate limit exceeded after max retries.")
+                    return None
+            else:
+                logging.error(f"Attempt {attempt}: Groq API error: {e}")
+                return None
+    return None
+
+
 def classify_llm(articles, api_key):
+    """
+    LLM intent classification with:
+    - Structured SYSTEM_INTENT_PROMPT (per KEC architecture)
+    - Confidence score (new field — mirrors KEC's confidence_score)
+    - Exponential backoff retry (mirrors KEC's tenacity pattern)
+    - Proper logging (mirrors KEC's logging.info/warning/error)
+    """
     if not api_key:
         for a in articles:
             is_, intent = compute_intent_kw(a["title"], a["summary"])
             a["intent"]      = intent
             a["intent_score"]= is_
+            a["confidence"]  = 40   # Low confidence without LLM
             a["category"]    = INTENT_TO_CAT.get(intent, "Other")
             a["key_insight"] = "Add Groq API key for AI-powered insights"
         return articles
 
-    client = Groq(api_key=api_key)
-    intents = list(INTENT_SCORES.keys())
-    for a in articles:
-        prompt = f"""You are a market intelligence analyst for an electrical safety PPE manufacturer in India.
-Products: electrical insulating gloves, rubber insulating mats, arc flash suits.
-Competitors: Honeywell, Salisbury, CATU, Novax, Ansell, DPL, MN Rubber, Jayco.
-Geography: India focus.
+    client  = Groq(api_key=api_key)
+    total   = len(articles)
+    logging.info(f"Starting LLM classification for {total} articles.")
 
-Classify intent into EXACTLY ONE of: {json.dumps(intents)}
-Write ONE key insight max 12 words, India-focused.
+    for idx, a in enumerate(articles):
+        logging.info(f"  Classifying {idx+1}/{total}: {a['title'][:60]}...")
 
-Title: {a['title']}
-Summary: {a['summary']}
+        # Build user message (system prompt is now a separate constant)
+        t = a["title"]
+        s = a["summary"][:300]
+        user_msg = f"Title: {t}\nSummary: {s}"
 
-Reply ONLY in valid JSON: {{"intent":"...","key_insight":"..."}}"""
-        try:
-            resp = client.chat.completions.create(
-                model="llama3-8b-8192",
-                messages=[{"role":"user","content":prompt}],
-                max_tokens=80, temperature=0.1,
-            )
-            r = json.loads(resp.choices[0].message.content.strip())
-            intent = r.get("intent","General News / Mention")
-            if intent not in INTENT_SCORES: intent = "General News / Mention"
-            a["intent"]      = intent
-            a["intent_score"]= INTENT_SCORES[intent]
-            a["category"]    = INTENT_TO_CAT.get(intent,"Other")
-            a["key_insight"] = r.get("key_insight","—")
-        except Exception:
+        result = _call_groq_with_retry(client, SYSTEM_INTENT_PROMPT + "\n\n" + user_msg)
+
+        if result:
+            intent = result.get("intent", "General News / Mention")
+            if intent not in INTENT_SCORES:
+                intent = "General News / Mention"
+            a["intent"]       = intent
+            a["intent_score"] = INTENT_SCORES[intent]
+            a["confidence"]   = max(0, min(100, int(result.get("confidence", 50))))
+            a["category"]     = INTENT_TO_CAT.get(intent, "Other")
+            a["key_insight"]  = result.get("key_insight", "—")
+            logging.info(f"    → Intent: {intent} | Confidence: {a['confidence']}")
+        else:
+            # Graceful fallback — keyword classifier
             is_, intent = compute_intent_kw(a["title"], a["summary"])
-            a["intent"]=intent; a["intent_score"]=is_
-            a["category"]=INTENT_TO_CAT.get(intent,"Other"); a["key_insight"]="—"
-        time.sleep(0.3)
+            a["intent"]      = intent
+            a["intent_score"]= is_
+            a["confidence"]  = 30   # Low confidence on fallback
+            a["category"]    = INTENT_TO_CAT.get(intent, "Other")
+            a["key_insight"] = "—"
+            logging.warning(f"    → Fallback to keyword classifier for: {a['title'][:50]}")
+
+        time.sleep(0.5)   # Matches KEC's 0.5s delay between calls
+
+    logging.info("LLM classification complete.")
     return articles
 
 # ══════════════════════════════════════════════════════════════════
@@ -935,6 +1110,7 @@ if fetch_btn or "intel_data" in st.session_state:
         time_label = time_option
         st.info(f"🔍 Running **{len(queries)} queries** · ⏱️ **{time_label}** · strict electrical safety filter · dedup ON · India-focused")
         with st.spinner("Fetching, filtering, scoring, deduplicating…"):
+            st.session_state["_groq_key"] = api_key or ""
             kept, removed = fetch_all_news(
                 tuple(queries), days_back, api_key or "",
                 w_kw, w_comp, w_intent
@@ -1067,6 +1243,7 @@ if fetch_btn or "intel_data" in st.session_state:
                       🗞️ {row['source']} &nbsp;|&nbsp;
                       📅 {row['published'].strftime('%d %b %Y')} &nbsp;|&nbsp;
                       🎯 {row.get('intent','—')} &nbsp;|&nbsp;
+                      🔵 Confidence: {row.get('confidence', '—')}% &nbsp;|&nbsp;
                       💡 {ki}
                     </div>
                     {"<div class='score-bd'>📐 "+bd+"</div>" if show_breakdown else ""}
@@ -1089,8 +1266,9 @@ if fetch_btn or "intel_data" in st.session_state:
             # Export
             st.markdown("---")
             e1,e2 = st.columns(2)
-            ec = ["title","category","relevance","intent","kw_score","comp_score",
-                  "comp_hits","key_insight","score_breakdown","source","published","link"]
+            ec = ["title","category","relevance","intent","intent_score","confidence",
+                  "kw_score","comp_score","comp_hits","key_insight","score_breakdown",
+                  "source","published","link"]
             out  = df_show[[c for c in ec if c in df_show.columns]].copy()
             full = df[[c for c in ec if c in df.columns]].copy()
             for d in [out, full]:
