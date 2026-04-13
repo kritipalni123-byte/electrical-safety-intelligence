@@ -739,7 +739,8 @@ Reply ONLY in valid JSON: {{"intent":"...","key_insight":"..."}}"""
 # ══════════════════════════════════════════════════════════════════
 
 def fetch_google_news(query, days_back=30):
-    """Fetch from Google News RSS. Append 'India' only if not already present."""
+    """Fetch from Google News RSS. Append 'India' only if not already present.
+    If days_back is None → no time filter, fetch all available articles."""
     iq  = f"{query} India" if "india" not in query.lower() else query
     url = (f"https://news.google.com/rss/search?"
            f"q={urllib.parse.quote(iq)}&hl=en-IN&gl=IN&ceid=IN:en")
@@ -747,12 +748,13 @@ def fetch_google_news(query, days_back=30):
         feed = feedparser.parse(url)
     except Exception:
         return []
-    cutoff = datetime.now() - timedelta(days=days_back)
+    # None = no time limit; otherwise apply cutoff
+    cutoff = None if days_back is None else datetime.now() - timedelta(days=days_back)
     out = []
     for e in feed.entries:
         try:    pub = datetime(*e.published_parsed[:6])
         except: pub = datetime.now()
-        if pub >= cutoff:
+        if cutoff is None or pub >= cutoff:
             out.append({
                 "title":   e.title,
                 "link":    e.link,
@@ -878,7 +880,17 @@ with st.sidebar:
     inc_comp_kw  = st.checkbox("Competitor-specific keywords", value=True)
 
     st.markdown('<div class="sh">📅 Filters</div>', unsafe_allow_html=True)
-    days_back      = st.slider("Days of news", 7, 90, 30)
+    time_option = st.selectbox(
+        "Time range",
+        ["Last 7 days","Last 14 days","Last 30 days","Last 60 days","Last 90 days","No limit (all available)"],
+        index=2,
+        help="'No limit' fetches all articles Google News has available (typically ~3 months)"
+    )
+    TIME_MAP = {
+        "Last 7 days": 7, "Last 14 days": 14, "Last 30 days": 30,
+        "Last 60 days": 60, "Last 90 days": 90, "No limit (all available)": None,
+    }
+    days_back = TIME_MAP[time_option]
     selected_cats  = st.multiselect("Categories", CATEGORIES, default=CATEGORIES)
     min_score      = st.slider("Min score (0–100)", 0, 100, 30,
                                 help="Recommended: 30+ to catch all relevant articles")
@@ -920,7 +932,8 @@ st.markdown("""
 if fetch_btn or "intel_data" in st.session_state:
     if fetch_btn:
         queries = build_queries(sel_comp, sel_groups, inc_comp_kw)
-        st.info(f"🔍 Running **{len(queries)} queries** — strict electrical safety filter · dedup ON · India-focused")
+        time_label = time_option
+        st.info(f"🔍 Running **{len(queries)} queries** · ⏱️ **{time_label}** · strict electrical safety filter · dedup ON · India-focused")
         with st.spinner("Fetching, filtering, scoring, deduplicating…"):
             kept, removed = fetch_all_news(
                 tuple(queries), days_back, api_key or "",
@@ -928,6 +941,7 @@ if fetch_btn or "intel_data" in st.session_state:
             )
             st.session_state["intel_data"]   = kept
             st.session_state["removed_data"] = removed
+            st.session_state["time_label"]   = time_label
 
     kept    = st.session_state.get("intel_data",   [])
     removed = st.session_state.get("removed_data", [])
@@ -935,7 +949,7 @@ if fetch_btn or "intel_data" in st.session_state:
     df_rem  = pd.DataFrame(removed) if removed else pd.DataFrame()
 
     if df.empty:
-        st.warning("⚠️ No articles found. Try: (1) increase Days slider to 60–90, (2) lower Min Score to 20, (3) check your keyword group selections in the sidebar.")
+        st.warning("⚠️ No articles found. Try: (1) select 'No limit' for time range, (2) lower Min Score to 20, (3) check your keyword group selections in the sidebar.")
     else:
         df_f = df[df["category"].isin(selected_cats) & (df["relevance"] >= min_score)].copy()
 
