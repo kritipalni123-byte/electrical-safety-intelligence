@@ -359,33 +359,126 @@ ALL_MAT_KW   = [k for v in KEYWORDS_MATS.values()   for k in v]
 ALL_ARC_KW   = [k for v in KEYWORDS_ARC.values()    for k in v]
 ALL_PRODUCT_KW = ALL_GLOVE_KW + ALL_MAT_KW + ALL_ARC_KW + KEYWORDS_COMMON
 
-# Short tokens for matching inside article text (single/two words, easier to match)
+# ── PRODUCT TOKENS — CONTEXT-SAFE MULTI-WORD PHRASES ──────────────
+# CRITICAL DESIGN RULE: Every token MUST be a multi-word phrase that
+# cannot accidentally match unrelated content.
+#
+# BANNED patterns (cause Netflix / wrong article matches):
+#   "class 0", "class 1", "class 2"  → matches "Class of 2024", Netflix shows
+#   "arc flash" alone                → matches electrical engineering broadly
+#   "rubber mat" alone               → matches yoga mat, gym mat, door mat
+#   "electrical safety" alone        → matches home wiring, consumer EV content
+#   "8 cal", "25 cal", "40 cal"      → matches calories, caliber (firearms)
+#   "nfpa 70e" alone                 → too generic arc flash standard
+#
+# SAFE: phrases that REQUIRE both a domain word AND a context word together
 PRODUCT_TOKENS = [
-    # gloves
-    "insulating glove","electrical glove","dielectric glove","rubber glove",
-    "high voltage glove","arc flash glove","lineman glove","class 0","class 1",
-    "class 2","class 3","class 4","class 00","11kv glove","33kv glove",
-    "live line glove","voltage glove","iec 60903","astm d120","is 4770",
-    "en 60903","nfpa 70e glove","osha 1910.137",
-    # mats
-    "insulating mat","dielectric mat","switchboard mat","panel mat",
-    "substation mat","rubber mat","iec 61111","is 15652","11kv mat","33kv mat",
-    "anti shock mat","electrical mat",
-    # arc suits
-    "arc flash","arc suit","arc rated","arc flash suit","arc flash ppe",
-    "arc flash hood","arc flash jacket","arc flash coverall","arc flash helmet",
-    "iec 61482","astm f1506","nfpa 70e","atpv","cal/cm2","8 cal","25 cal","40 cal",
-    "flame resistant suit","fr suit","arc protection",
-    # general electrical safety (short)
-    "electrical ppe","live line ppe","high voltage ppe","electrical safety",
-    "electrical insulation","dielectric protection","substation safety",
-    "switchgear safety","electrical protective",
+    # ── Insulating Gloves (require "glove" + domain qualifier) ──────
+    "insulating glove",
+    "electrical insulating glove",
+    "rubber insulating glove",
+    "dielectric glove",
+    "high voltage glove",
+    "voltage rated glove",
+    "arc flash glove",
+    "lineman glove",
+    "live line glove",
+    "class 0 glove",
+    "class 1 glove",
+    "class 2 glove",
+    "class 3 glove",
+    "class 4 glove",
+    "class 00 glove",
+    "11kv insulating glove",
+    "33kv insulating glove",
+    "electrician insulating glove",
+    "electrical safety glove",
+    "rubber glove electrical",
+    "protective glove electrical",
+    "iec 60903 glove",
+    "astm d120 glove",
+    "is 4770 glove",
+    "en 60903 glove",
+    # ── Insulating Mats (require "mat" + domain qualifier) ──────────
+    "insulating mat",
+    "electrical insulating mat",
+    "rubber insulating mat",
+    "dielectric mat",
+    "switchboard mat",
+    "electrical safety mat",
+    "anti shock mat",
+    "substation safety mat",
+    "panel room mat",
+    "transformer room mat",
+    "control panel mat",
+    "ht panel mat",
+    "lt panel mat",
+    "11kv mat",
+    "33kv mat",
+    "high voltage mat",
+    "iec 61111 mat",
+    "is 15652 mat",
+    "rubber mat electrical",
+    "non conductive mat",
+    "flame retardant mat",
+    # ── Arc Flash Suits (require "arc flash" + suit/ppe qualifier) ──
+    "arc flash suit",
+    "arc flash ppe",
+    "arc flash protection suit",
+    "arc flash protective clothing",
+    "arc flash coverall",
+    "arc flash hood",
+    "arc flash jacket",
+    "arc flash helmet",
+    "arc flash face shield",
+    "arc flash balaclava",
+    "arc rated suit",
+    "arc rated clothing",
+    "arc protection suit",
+    "flame resistant arc suit",
+    "electrical arc suit",
+    "iec 61482 suit",
+    "nfpa 70e suit",
+    "nfpa 70e arc flash",
+    "cal cm2 arc suit",
+    "8 cal arc",
+    "25 cal arc",
+    "40 cal arc",
+    "atpv arc",
+    "fr arc flash",
+    # ── General Electrical Safety PPE (require "electrical" + "ppe/safety") ─
+    "electrical ppe",
+    "electrical safety ppe",
+    "live line ppe",
+    "high voltage ppe",
+    "electrical protective equipment",
+    "electrical safety equipment",
+    "electrical insulation protection",
+    "substation safety equipment",
+    "switchgear safety ppe",
+    "electrical worker ppe",
+    "electrical hazard protection",
+    "voltage protective",
+    "dielectric protection equipment",
 ]
 
 STANDARDS_TOKENS = [
-    "iec 60903","iec 61111","iec 61482","astm d120","astm f1506","astm f2675",
-    "nfpa 70e","is 4770","is 15652","en 60903","osha 1910","bis certification",
-    "qco electrical","quality control order electrical",
+    # Standards are fine as standalone since they are very specific strings
+    "iec 60903",   # insulating gloves
+    "iec 61111",   # insulating mats
+    "iec 61482",   # arc flash suits
+    "astm d120",   # insulating gloves
+    "astm f1506",  # arc flash clothing
+    "astm f2675",  # insulating gloves
+    "is 4770",     # BIS insulating gloves India
+    "is 15652",    # BIS insulating mats India
+    "en 60903",    # European insulating gloves
+    "osha 1910.137",  # OSHA electrical protective equipment
+    "bis certification glove",
+    "qco insulating glove",
+    "quality control order insulating",
+    "bis standard electrical glove",
+    "bis standard electrical mat",
 ]
 
 INDIA_TOKENS = [
@@ -417,13 +510,36 @@ COMP_UNRELATED = [
     ("ansell","food handling"),("ansell","chemical glove"),("ansell","nitrile"),
     ("ansell","cut resistant"),
 ]
-# Consumer/academic — always block
+# Consumer/academic/entertainment — always block
 ALWAYS_BLOCK = [
+    # Consumer electronics
     "home appliance","consumer electronic","led bulb","smartphone",
     "laptop charger","television","washing machine","refrigerator",
     "air conditioner","ev battery pack","battery management system",
+    # Academic journals
     "journal of ","doi:10.","pubmed","elsevier journal","springer nature",
-    "ieee xplore","sciencedirect","peer-reviewed",
+    "ieee xplore","sciencedirect","peer-reviewed","research paper",
+    # Entertainment / wrong-context "class" usage
+    "netflix","amazon prime","disney+","hulu","streaming service",
+    "class of 2024","class of 2025","class of 2026",
+    "graduating class","school class","college class",
+    "business class","economy class","first class flight",
+    "class action lawsuit","class action settlement",
+    # Wrong-context "cal" (calories/caliber)
+    "calorie","caloric","diet plan","weight loss",
+    ".45 caliber",".38 caliber","9mm caliber","firearm caliber",
+    # Wrong-context "mat"
+    "yoga mat","gym mat","fitness mat","wrestling mat",
+    "mouse mat","door mat","welcome mat","bath mat",
+    # Wrong-context "arc"
+    "arc reactor","arc welding machine","marvel arc","dc arc comics",
+    "story arc","narrative arc","arc de triomphe",
+    # General unrelated safety
+    "fall protection harness","safety harness fall",
+    "hard hat manufacturer","safety helmet fall",
+    "respiratory protection","gas mask chemical",
+    "safety footwear","safety boot manufacturer",
+    "fire safety equipment","fire suppression",
 ]
 
 
@@ -433,9 +549,21 @@ ALWAYS_BLOCK = [
 
 SYSTEM_INTENT_PROMPT = """
 You are a senior market intelligence analyst for an electrical safety PPE manufacturer in India.
-Products tracked: electrical insulating gloves, rubber insulating mats, arc flash suits.
-Competitors: Honeywell, Salisbury, CATU, Novax, Ansell, DPL, MN Rubber, Jayco.
+Products tracked: electrical insulating gloves (IEC 60903/IS 4770), rubber insulating mats (IEC 61111/IS 15652), arc flash suits (IEC 61482/NFPA 70E).
+Competitors: Honeywell (Salisbury), CATU, Novax, Ansell, DPL, MN Rubber, Jayco.
 Geography focus: INDIA market only.
+
+STEP 1 — DOMAIN VALIDATION (do this first)
+Before classifying, verify this article is genuinely about electrical safety PPE.
+DISQUALIFY and return intent="Irrelevant" if:
+- "Class 2" refers to Netflix, streaming, movies, education — NOT insulating glove classification
+- "arc flash" is a general electrical term NOT about protective clothing/suits
+- "rubber mat" is a yoga/gym/door mat NOT an electrical insulating mat
+- Competitor (Honeywell, Ansell etc.) is in unrelated business (HVAC, medical gloves, building systems)
+- Article is about consumer electricals, academic papers, or general industrial safety
+
+STEP 2 — CLASSIFICATION
+If genuinely about electrical safety PPE, classify intent:
 
 TASK
 Given the article title and summary, return a JSON object with:
@@ -630,40 +758,79 @@ def is_disqualified(title, summary, source):
             if comp in text and unrelated in text:
                 return True, f"{comp.title()} in unrelated context ({unrelated})"
 
+    # 4. Domain anchor check — final gate against off-topic articles
+    # If no competitor AND no electrical safety domain word present → discard
+    # This kills Netflix "Class 2", yoga mats, gun caliber "cal/cm2" etc.
+    DOMAIN_ANCHORS = [
+        "insulating glove","insulating mat","arc flash suit","arc flash ppe",
+        "electrical insulating","rubber insulating","dielectric glove",
+        "electrical safety mat","electrical safety glove","voltage rated glove",
+        "iec 60903","iec 61111","iec 61482","is 4770","is 15652",
+        "astm d120","astm f1506","nfpa 70e arc","electrical ppe",
+        "high voltage glove","live line ppe","arc rated suit",
+        "switchboard mat","arc flash coverall","arc flash hood",
+    ]
+    comp_present   = any(c in text for c in COMP_NAMES)
+    domain_present = any(d in text for d in DOMAIN_ANCHORS)
+
+    if not comp_present and not domain_present:
+        return True, "No electrical safety domain anchor and no competitor"
+
     return False, ""
+
+# Tokens considered "strong" — 3+ words, very specific, low false-positive risk
+STRONG_TOKENS = [t for t in PRODUCT_TOKENS if len(t.split()) >= 3] + STANDARDS_TOKENS
 
 def is_relevant(title, summary):
     """
-    Relevance filter — 3 rules:
-    Rule 1: Competitor + (another competitor OR any product token OR standard)
-    Rule 2: Product/standard token present (even without competitor)
-    Rule 3: Article must be within electrical safety universe
+    Relevance filter with false-positive prevention.
 
-    Key fix: Uses SHORT TOKEN matching (not long phrases) so short summaries match.
+    Rule 1: Competitor + product/standard token → RELEVANT
+            (Competitor name anchors the article to our universe)
+
+    Rule 2: Product token present WITHOUT competitor →
+            Requires EITHER a strong token (3+ words, very specific)
+            OR 2+ product tokens together.
+            This prevents "arc flash" alone / "class 2" alone from passing.
+
+    Rule 3: Standard token (IEC 60903, IS 4770 etc.) → RELEVANT
+            Standards are specific enough to be safe standalone signals.
+
+    FALSE POSITIVE PREVENTION:
+    - Single short tokens like "arc flash", "rubber mat", "electrical safety"
+      are NOT enough alone — they match too many unrelated articles
+    - "class 0/1/2" tokens now always include "glove" so they can't match Netflix
     """
-    text = (title + " " + summary).lower()
-    comp_hits = get_comp_hits(text)
-    has_comp  = len(comp_hits) > 0
-    has_prod  = has_product_token(text)
+    text       = (title + " " + summary).lower()
+    title_lower = title.lower()
+    comp_hits  = get_comp_hits(text)
+    has_comp   = len(comp_hits) > 0
 
-    # Rule 1: Competitor + electrical safety content
-    if has_comp and has_prod:
+    # Rule 1: Competitor + any product token → always relevant
+    if has_comp and has_product_token(text):
         return True, comp_hits
 
     # Rule 1b: Two or more competitors together
     if len(comp_hits) >= 2:
         return True, comp_hits
 
-    # Rule 2: Clear product/standard content without competitor
-    if has_prod:
-        # Count how many tokens match — need at least 1 strong signal
-        matches = [t for t in PRODUCT_TOKENS + STANDARDS_TOKENS if t in text]
-        if len(matches) >= 1:
+    # Rule 3: Standard token alone is strong enough (very specific strings)
+    std_hits = [s for s in STANDARDS_TOKENS if s in text]
+    if std_hits:
+        return True, comp_hits
+
+    # Rule 2: Product tokens without competitor — need STRONG signal
+    prod_matches = [t for t in PRODUCT_TOKENS if t in text]
+    if prod_matches:
+        # Strong token (3+ words) OR two different product tokens
+        strong_hits = [t for t in prod_matches if len(t.split()) >= 3]
+        if strong_hits:
+            return True, comp_hits
+        if len(prod_matches) >= 2:
             return True, comp_hits
 
-    # Rule 3: Competitor in title with electrical safety context
-    title_lower = title.lower()
-    if has_comp and any(t in title_lower for t in PRODUCT_TOKENS + STANDARDS_TOKENS):
+    # Rule 4: Competitor in title (prominent placement) + product in body
+    if has_comp and any(t in title_lower for t in PRODUCT_TOKENS):
         return True, comp_hits
 
     return False, comp_hits
