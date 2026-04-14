@@ -325,7 +325,55 @@ KEYWORDS_COMMON = [
     "electrical PPE","live line PPE","electrical safety equipment",
 ]
 
+# ── INDIA MARKET DISCOVERY QUERIES ──────────────────────────────
+# These are BROADER queries designed to surface industry news,
+# product launches, regulatory updates, and market developments
+# that would NOT be caught by product-specific keyword searches.
+# Example: "Honeywell opens glove factory India" won't contain
+# "electrical insulating gloves" but IS highly relevant.
+KEYWORDS_INDIA_MARKET = [
+    # Industry news discovery
+    "electrical safety PPE India news",
+    "electrical safety equipment India 2025",
+    "electrical safety equipment India 2026",
+    "PPE manufacturer India launch",
+    "electrical safety innovation India",
+    "electrical PPE market India",
+    "electrical safety standards India",
+    "electrical PPE regulations India",
+    # Competitor in India context (broad)
+    "Honeywell safety India",
+    "Honeywell glove India",
+    "CATU India electrical safety",
+    "Ansell safety India",
+    "Novax gloves India",
+    "DPL India electrical safety",
+    "Jayco India safety gloves",
+    # Regulatory & Standards news
+    "BIS electrical safety India",
+    "IS 4770 India update",
+    "IS 15652 India update",
+    "QCO electrical safety India",
+    "electrical PPE mandatory India",
+    "CEA electrical safety regulation India",
+    "DGFASLI electrical safety India",
+    "electrical safety standard India 2025",
+    # Market & capacity news
+    "electrical safety glove production India",
+    "insulating glove factory India",
+    "rubber insulating mat India",
+    "arc flash PPE India",
+    "electrical safety PPE launch India",
+    "electrical protective equipment market India",
+    # Technology & innovation
+    "smart electrical safety PPE India",
+    "AI PPE electrical safety India",
+    "electrical safety technology India",
+    "new electrical safety product India",
+]
+
 ALL_KEYWORD_GROUPS = {
+    "🇮🇳 India Market News": KEYWORDS_INDIA_MARKET,
     "🧤 Gloves — Core":      KEYWORDS_GLOVES["Core"],
     "🧤 Gloves — Technical": KEYWORDS_GLOVES["Technical"],
     "🧤 Gloves — Standards": KEYWORDS_GLOVES["Standards"],
@@ -460,6 +508,30 @@ PRODUCT_TOKENS = [
     "electrical hazard protection",
     "voltage protective",
     "dielectric protection equipment",
+    # ── Broad glove/mat/arc terms for industry news discovery ──────
+    # These catch "Honeywell glove production India", "new safety glove launch"
+    # without being so short that they match unrelated content
+    "safety glove",          # Still needs competitor OR standard to pass Rule 1
+    "electrical glove",      # Specific enough as 2-word phrase
+    "glove production line",
+    "glove manufacturing",
+    "rubber glove production",
+    "glove factory",
+    "insulating glove factory",
+    "electrical safety glove",
+    "electrical insulating mat",
+    "rubber safety mat",
+    "arc flash protection",
+    "electrical arc protection",
+    "PPE electrical safety",
+    "electrical hazard PPE",
+    "electrical maintenance PPE",
+    "lineman safety equipment",
+    "substation safety PPE",
+    "power sector PPE",
+    "electrical worker safety",
+    "smart electrical PPE",
+    "AI powered PPE electrical",
 ]
 
 STANDARDS_TOKENS = [
@@ -762,13 +834,29 @@ def is_disqualified(title, summary, source):
     # If no competitor AND no electrical safety domain word present → discard
     # This kills Netflix "Class 2", yoga mats, gun caliber "cal/cm2" etc.
     DOMAIN_ANCHORS = [
-        "insulating glove","insulating mat","arc flash suit","arc flash ppe",
-        "electrical insulating","rubber insulating","dielectric glove",
-        "electrical safety mat","electrical safety glove","voltage rated glove",
+        # Glove-related (broad enough to catch "glove production", "safety gloves")
+        "insulating glove","electrical glove","safety glove","rubber glove",
+        "dielectric glove","high voltage glove","arc flash glove",
+        "glove production","glove manufacturing","glove line",
+        # Mat-related
+        "insulating mat","electrical mat","rubber mat electrical",
+        "switchboard mat","dielectric mat",
+        # Arc flash / PPE
+        "arc flash suit","arc flash ppe","arc flash protection",
+        "arc rated","arc flash coverall","arc flash hood",
+        "electrical arc suit","flame resistant suit",
+        # General electrical safety PPE
+        "electrical ppe","electrical safety ppe","electrical safety equipment",
+        "electrical insulating","rubber insulating","dielectric protection",
+        "high voltage ppe","live line ppe","electrical protective",
+        "voltage rated","electrical hazard protection",
+        # Standards (very specific, safe anchors)
         "iec 60903","iec 61111","iec 61482","is 4770","is 15652",
-        "astm d120","astm f1506","nfpa 70e arc","electrical ppe",
-        "high voltage glove","live line ppe","arc rated suit",
-        "switchboard mat","arc flash coverall","arc flash hood",
+        "astm d120","astm f1506","nfpa 70e","atpv",
+        # Indian-specific electrical safety terms
+        "electrical safety india","electrical ppe india",
+        "bis electrical safety","dgfasli","pgiel",
+        "electrical safety gloves india","insulating gloves india",
     ]
     comp_present   = any(c in text for c in COMP_NAMES)
     domain_present = any(d in text for d in DOMAIN_ANCHORS)
@@ -831,6 +919,29 @@ def is_relevant(title, summary):
 
     # Rule 4: Competitor in title (prominent placement) + product in body
     if has_comp and any(t in title_lower for t in PRODUCT_TOKENS):
+        return True, comp_hits
+
+    # Rule 5: India market news — non-tracked companies launching/innovating
+    # in our product space (e.g. "Extremus Safety launches AI PPE in India",
+    # "Star Infomatic unveils ElectroSense safety helmets")
+    # Requires: India signal + product signal + business event signal
+    india_present = any(ind in text for ind in [
+        "india","indian","maharashtra","delhi","mumbai","bangalore",
+        "pune","gujarat","chennai","bis","dgfasli","pgiel",
+    ])
+    biz_event = any(ev in text for ev in [
+        "launch","launches","unveiled","introduces","new product",
+        "opens","inaugurated","expands","capacity","production line",
+        "factory","manufacturer","mandatory","standard","regulation",
+        "market","supply","order","contract","innovative","technology",
+    ])
+    prod_broad = any(p in text for p in [
+        "electrical safety","safety glove","safety mat","arc flash",
+        "electrical ppe","electrical protective","ppe manufacturer",
+        "safety equipment electrical","insulating","dielectric",
+        "electrical hazard","voltage protection","live line",
+    ])
+    if india_present and biz_event and prod_broad:
         return True, comp_hits
 
     return False, comp_hits
@@ -1168,14 +1279,34 @@ def fetch_google_news(query, days_back=30, max_retries=3):
 
                 s_lower = source.lower()
 
-                # KEC keyword relevance gate: skip if query not in title or source
-                # Use first 3 words of query for flexible matching
-                query_words = q_lower.split()[:3]
-                query_short = " ".join(query_words)
-                if query_short not in t_lower and query_short not in s_lower:
-                    # Also try first word only for very short matches
-                    if query_words[0] not in t_lower and query_words[0] not in s_lower:
-                        continue
+                # Keyword relevance gate — loosened to avoid missing relevant articles
+                # Strategy: try progressively shorter matches against title+summary+source
+                # Key insight: "Honeywell opens automated glove line" won't have
+                # "electrical insulating gloves" but IS relevant — so we relax the gate
+                # and let the downstream is_relevant() + scoring do the heavy filtering.
+                summary_text = e.get("summary", "").lower()
+                full_text = t_lower + " " + s_lower + " " + summary_text
+
+                query_words = q_lower.split()
+                matched = False
+
+                # Try progressively shorter slices of the query
+                for n in [3, 2, 1]:
+                    chunk = " ".join(query_words[:n])
+                    if chunk and chunk in full_text:
+                        matched = True
+                        break
+
+                # For competitor name queries (single/two word company names),
+                # also check if ANY word from the query appears (company names)
+                if not matched and len(query_words) <= 3:
+                    for w in query_words:
+                        if len(w) >= 4 and w in full_text:  # skip short words
+                            matched = True
+                            break
+
+                if not matched:
+                    continue
 
                 # Date filter
                 try:    pub = datetime(*e.published_parsed[:6])
@@ -1319,11 +1450,12 @@ with st.sidebar:
     st.markdown('<div class="sh">📦 Products & Keywords</div>', unsafe_allow_html=True)
     product_lines = st.multiselect(
         "Product lines",
-        ["🧤 Gloves","🟫 Mats","🦺 Arc Suits","🌐 Common"],
-        default=["🧤 Gloves","🟫 Mats","🦺 Arc Suits","🌐 Common"],
+        ["🇮🇳 India Market News","🧤 Gloves","🟫 Mats","🦺 Arc Suits","🌐 Common"],
+        default=["🇮🇳 India Market News","🧤 Gloves","🟫 Mats","🦺 Arc Suits","🌐 Common"],
     )
     avail_grp = [g for g in ALL_KEYWORD_GROUPS
-                 if any(pl.split(" ")[0] in g for pl in product_lines) or "Common" in g]
+                 if any(pl.split(" ")[0] in g for pl in product_lines)
+                 or "Common" in g or "India Market" in g]
     sel_groups   = st.multiselect("Keyword groups", avail_grp, default=avail_grp)
     inc_comp_kw  = st.checkbox("Competitor-specific keywords", value=True)
 
