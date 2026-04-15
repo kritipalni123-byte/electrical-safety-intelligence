@@ -830,39 +830,36 @@ def is_disqualified(title, summary, source):
             if comp in text and unrelated in text:
                 return True, f"{comp.title()} in unrelated context ({unrelated})"
 
-    # 4. Domain anchor check — final gate against off-topic articles
-    # If no competitor AND no electrical safety domain word present → discard
-    # This kills Netflix "Class 2", yoga mats, gun caliber "cal/cm2" etc.
-    DOMAIN_ANCHORS = [
-        # Glove-related (broad enough to catch "glove production", "safety gloves")
-        "insulating glove","electrical glove","safety glove","rubber glove",
-        "dielectric glove","high voltage glove","arc flash glove",
-        "glove production","glove manufacturing","glove line",
-        # Mat-related
-        "insulating mat","electrical mat","rubber mat electrical",
-        "switchboard mat","dielectric mat",
+    # 4. Final off-topic gate — PERMISSIVE by design
+    # Only block articles that have ZERO electrical safety signal.
+    # We deliberately do NOT require competitor names here — new entrants
+    # like Extremus Safety, Star Infomatic etc. are valid market intelligence.
+    # The strict relevance filtering happens in is_relevant() below.
+    BROAD_ELEC_SIGNALS = [
+        # Any glove context
+        "glove",
+        # Mat / insulation context
+        "insulating mat","switchboard mat","dielectric mat","electrical mat",
         # Arc flash / PPE
-        "arc flash suit","arc flash ppe","arc flash protection",
-        "arc rated","arc flash coverall","arc flash hood",
-        "electrical arc suit","flame resistant suit",
-        # General electrical safety PPE
-        "electrical ppe","electrical safety ppe","electrical safety equipment",
-        "electrical insulating","rubber insulating","dielectric protection",
-        "high voltage ppe","live line ppe","electrical protective",
-        "voltage rated","electrical hazard protection",
-        # Standards (very specific, safe anchors)
+        "arc flash","arc suit","arc rated","electrical ppe",
+        # Electrical safety context
+        "electrical safety","electrical hazard","electrical worker",
+        "high voltage","live line","dielectric","electrical insulation",
+        "substation","switchgear","electrical protective",
+        "voltage protection","electrical maintenance",
+        # Standards / regulatory
         "iec 60903","iec 61111","iec 61482","is 4770","is 15652",
-        "astm d120","astm f1506","nfpa 70e","atpv",
-        # Indian-specific electrical safety terms
-        "electrical safety india","electrical ppe india",
-        "bis electrical safety","dgfasli","pgiel",
-        "electrical safety gloves india","insulating gloves india",
+        "nfpa 70e","astm d120","bis","qco","dgfasli","pgiel",
+        # Competitor names already cover their own articles
+        "honeywell","salisbury","catu","novax","ansell","dpl","mn rubber","jayco",
+        # PPE in safety context
+        "safety ppe","ppe manufacturer","safety equipment",
+        "power sector safety","lineman","field technician",
     ]
-    comp_present   = any(c in text for c in COMP_NAMES)
-    domain_present = any(d in text for d in DOMAIN_ANCHORS)
 
-    if not comp_present and not domain_present:
-        return True, "No electrical safety domain anchor and no competitor"
+    has_any_signal = any(sig in text for sig in BROAD_ELEC_SIGNALS)
+    if not has_any_signal:
+        return True, "Zero electrical safety signals — clearly off-topic"
 
     return False, ""
 
