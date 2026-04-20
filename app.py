@@ -612,6 +612,19 @@ ALWAYS_BLOCK = [
     "respiratory protection","gas mask chemical",
     "safety footwear","safety boot manufacturer",
     "fire safety equipment","fire suppression",
+    # Electrical INFRASTRUCTURE (not PPE) — only blocked if no PPE token present
+    # Cable glands, wiring, breakers are "electrical safety" but NOT our products
+    "cable gland","cable tray","cable management","cable accessories",
+    "cable connector","wire harness","circuit breaker","mcb","mccb",
+    "distribution board","electrical switchboard","electrical conduit",
+    "electrical fitting","cable entry","busbar trunking","bus duct",
+    "earthing rod","earthing electrode","earth pit",
+    "lightning conductor","surge protection device",
+    "electrical wire","electrical cable","power cable manufacturer",
+    "electric motor","motor starter","variable frequency drive",
+    "electrical enclosure","junction box electrical",
+    "transformer oil","insulating oil","transformer bushing",
+    "electrical appliance","electrical component manufacturer",
 ]
 
 
@@ -836,25 +849,32 @@ def is_disqualified(title, summary, source):
     # like Extremus Safety, Star Infomatic etc. are valid market intelligence.
     # The strict relevance filtering happens in is_relevant() below.
     BROAD_ELEC_SIGNALS = [
-        # Any glove context
-        "glove",
-        # Mat / insulation context
-        "insulating mat","switchboard mat","dielectric mat","electrical mat",
-        # Arc flash / PPE
-        "arc flash","arc suit","arc rated","electrical ppe",
-        # Electrical safety context
-        "electrical safety","electrical hazard","electrical worker",
-        "high voltage","live line","dielectric","electrical insulation",
-        "substation","switchgear","electrical protective",
-        "voltage protection","electrical maintenance",
-        # Standards / regulatory
-        "iec 60903","iec 61111","iec 61482","is 4770","is 15652",
-        "nfpa 70e","astm d120","bis","qco","dgfasli","pgiel",
-        # Competitor names already cover their own articles
+        # Gloves — specific product phrases
+        "insulating glove","electrical glove","safety glove","rubber glove",
+        "dielectric glove","high voltage glove","arc flash glove","lineman glove",
+        # Mats — specific
+        "insulating mat","switchboard mat","dielectric mat","electrical safety mat",
+        # Arc flash / PPE suits — specific
+        "arc flash suit","arc flash ppe","arc flash protection",
+        "arc flash coverall","arc flash hood","arc rated suit","arc rated clothing",
+        "flame resistant suit","electrical arc suit",
+        # Electrical PPE — MUST be PPE-anchored
+        # REMOVED "electrical safety" alone — matches cable glands, wiring, switches
+        # REMOVED "electrical hazard" alone — too broad
+        "electrical safety ppe","electrical safety glove","electrical safety mat",
+        "electrical ppe","live line ppe","high voltage ppe",
+        "electrical protective equipment","electrical worker ppe",
+        "electrical insulation protection","voltage rated glove",
+        "dielectric protection","live line protection",
+        # Lineworker context
+        "lineman","substation safety","switchgear safety",
+        "electrical maintenance ppe","field technician safety",
+        # Standards — highly specific, safe
+        "iec 60903","iec 61111","iec 61482","is 4770","is 15652","nfpa 70e","astm d120","atpv",
+        # Indian regulatory
+        "qco electrical","dgfasli","pgiel",
+        # Competitors — always in scope
         "honeywell","salisbury","catu","novax","ansell","dpl","mn rubber","jayco",
-        # PPE in safety context
-        "safety ppe","ppe manufacturer","safety equipment",
-        "power sector safety","lineman","field technician",
     ]
 
     has_any_signal = any(sig in text for sig in BROAD_ELEC_SIGNALS)
@@ -933,10 +953,19 @@ def is_relevant(title, summary):
         "market","supply","order","contract","innovative","technology",
     ])
     prod_broad = any(p in text for p in [
-        "electrical safety","safety glove","safety mat","arc flash",
-        "electrical ppe","electrical protective","ppe manufacturer",
-        "safety equipment electrical","insulating","dielectric",
-        "electrical hazard","voltage protection","live line",
+        # PPE-specific only — REMOVED "electrical safety" alone because it
+        # matches cable glands, wiring, circuit breakers, transformers etc.
+        # REMOVED "insulating" alone — matches transformer insulating oil etc.
+        # REMOVED "dielectric" alone — matches dielectric testing of cables
+        "insulating glove","safety glove","electrical glove","arc flash glove",
+        "insulating mat","switchboard mat","dielectric mat",
+        "arc flash suit","arc flash ppe","arc rated","arc flash protection",
+        "arc flash coverall","arc flash hood","flame resistant suit",
+        "electrical ppe","electrical safety ppe","live line ppe",
+        "electrical protective equipment","electrical worker ppe",
+        "electrical safety glove","electrical safety mat",
+        "electrical maintenance ppe","lineman ppe",
+        "iec 60903","iec 61111","iec 61482","is 4770","is 15652","nfpa 70e","atpv",
     ])
     if india_present and biz_event and prod_broad:
         return True, comp_hits
