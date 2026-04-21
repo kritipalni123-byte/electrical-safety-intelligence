@@ -332,57 +332,44 @@ KEYWORDS_COMMON = [
 # Example: "Honeywell opens glove factory India" won't contain
 # "electrical insulating gloves" but IS highly relevant.
 KEYWORDS_INDIA_MARKET = [
-    # Direct product searches — mirror real Google search queries
-    "electrical safety gloves India",
-    "insulating gloves India",
-    "rubber insulating gloves India",
-    "electrical insulating gloves India",
-    "arc flash PPE India",
-    "arc flash suit India",
-    "electrical insulating mat India",
-    "rubber insulating mat India",
-    "switchboard mat India",
-    # Market & industry news
-    "electrical safety PPE India",
-    "electrical safety equipment India",
+    # Industry news discovery
+    "electrical safety PPE India news",
+    "electrical safety equipment India 2025",
+    "electrical safety equipment India 2026",
+    "PPE manufacturer India launch",
+    "electrical safety innovation India",
     "electrical PPE market India",
-    "PPE electrical safety India",
-    "electrical worker safety India",
-    "electrical safety India news",
-    "electrical protective equipment India",
-    "electrical maintenance safety India",
-    # Competitor broad (no India appended — competitor code handles it)
-    "Honeywell electrical safety gloves",
-    "Honeywell insulating gloves",
-    "Honeywell arc flash PPE",
-    "CATU electrical safety",
-    "CATU insulating gloves",
-    "Ansell electrical gloves",
-    "Novax insulating gloves",
-    "DPL safety gloves India",
-    "Jayco insulating gloves India",
-    # Regulatory & Standards (highest value queries)
-    "IS 4770 insulating gloves India",
-    "IS 15652 rubber mat India",
-    "BIS insulating gloves certification India",
-    "QCO electrical PPE India",
     "electrical safety standards India",
+    "electrical PPE regulations India",
+    # Competitor in India context (broad)
+    "Honeywell safety India",
+    "Honeywell glove India",
+    "CATU India electrical safety",
+    "Ansell safety India",
+    "Novax gloves India",
+    "DPL India electrical safety",
+    "Jayco India safety gloves",
+    # Regulatory & Standards news
+    "BIS electrical safety India",
+    "IS 4770 India update",
+    "IS 15652 India update",
+    "QCO electrical safety India",
+    "electrical PPE mandatory India",
+    "CEA electrical safety regulation India",
     "DGFASLI electrical safety India",
-    "CEA electrical PPE India",
-    # Product launches & innovation
-    "electrical safety gloves launch India",
-    "arc flash suit launch India",
-    "electrical PPE innovation India",
-    "insulating gloves manufacturer India",
-    "electrical safety PPE manufacturer India",
-    # Power sector context (where our products are used)
-    "electrical safety power sector India",
-    "lineman safety gloves India",
-    "substation safety PPE India",
-    "high voltage safety gloves India",
-    "live line PPE India",
-    "electrical safety 2025 India",
-    "electrical safety 2026 India",
+    "electrical safety standard India 2025",
+    # Market & capacity news
+    "electrical safety glove production India",
+    "insulating glove factory India",
+    "rubber insulating mat India",
+    "arc flash PPE India",
+    "electrical safety PPE launch India",
+    "electrical protective equipment market India",
+    # Technology & innovation
+    "smart electrical safety PPE India",
+    "AI PPE electrical safety India",
+    "electrical safety technology India",
+    "new electrical safety product India",
 ]
 
 ALL_KEYWORD_GROUPS = {
@@ -1251,22 +1238,13 @@ def fetch_google_news(query, days_back=30, max_retries=3):
     7. Per-query keyword match check — only keep articles that actually
        mention the query term (KEC: if (k not in t) and (k not in s))
     """
-    # Only append "India" to product/standard keyword queries.
-    # For competitor name queries (short, specific company names),
-    # don't append India — their global news often mentions India in body
-    # but not in the title, and appending India kills those results.
-    COMP_NAMES_FULL = ["honeywell","salisbury","catu","novax","ansell","dpl","mn rubber","jayco"]
-    is_comp_query = any(c in query.lower() for c in COMP_NAMES_FULL) and len(query.split()) <= 4
-    if is_comp_query or "india" in query.lower():
-        iq = query   # Use as-is for competitor queries
-    else:
-        iq = f"{query} India"  # Append India for product/standard queries
+    iq = f"{query} India" if "india" not in query.lower() else query
 
-    # Build URL — NO when:Nd in URL
-    # Reason: Google News RSS with when:Nd returns 0 results for niche queries
-    # like "electrical insulating gloves India" if no article in that exact window.
-    # We apply date filtering CLIENT-SIDE after fetch (more reliable).
-    encoded = urllib.parse.quote(iq)
+    # Build URL — add when:Nd for server-side date filtering (KEC pattern)
+    if days_back is not None:
+        encoded = urllib.parse.quote(f"{iq} when:{int(days_back)}d")
+    else:
+        encoded = urllib.parse.quote(iq)
     url = f"https://news.google.com/rss/search?q={encoded}&hl=en-IN&gl=IN&ceid=IN:en"
 
     for attempt in range(max_retries):
@@ -1327,27 +1305,31 @@ def fetch_google_news(query, days_back=30, max_retries=3):
 
                 s_lower = source.lower()
 
-                # Per-query relevance gate
-                # Design: Be PERMISSIVE at fetch time — let broad signals through.
-                # Strict filtering happens in is_relevant() and is_disqualified().
-                #
-                # Strategy by query type:
-                # 1. Competitor queries (honeywell, catu etc.): just check company name
-                # 2. Product queries: check if ANY meaningful word from query appears
-                # 3. India market queries: check first 2 meaningful words
+                # Keyword relevance gate — loosened to avoid missing relevant articles
+                # Strategy: try progressively shorter matches against title+summary+source
+                # Key insight: "Honeywell opens automated glove line" won't have
+                # "electrical insulating gloves" but IS relevant — so we relax the gate
+                # and let the downstream is_relevant() + scoring do the heavy filtering.
                 summary_text = e.get("summary", "").lower()
                 full_text = t_lower + " " + s_lower + " " + summary_text
 
-                query_words = [w for w in q_lower.split() if len(w) >= 4
-                               and w not in ("india","with","from","that","this","have","been")]
-
+                query_words = q_lower.split()
                 matched = False
 
-                # Check if ANY meaningful query word appears in the full text
-                for w in query_words:
-                    if w in full_text:
+                # Try progressively shorter slices of the query
+                for n in [3, 2, 1]:
+                    chunk = " ".join(query_words[:n])
+                    if chunk and chunk in full_text:
                         matched = True
                         break
+
+                # For competitor name queries (single/two word company names),
+                # also check if ANY word from the query appears (company names)
+                if not matched and len(query_words) <= 3:
+                    for w in query_words:
+                        if len(w) >= 4 and w in full_text:  # skip short words
+                            matched = True
+                            break
 
                 if not matched:
                     continue
@@ -1516,8 +1498,8 @@ with st.sidebar:
     }
     days_back = TIME_MAP[time_option]
     selected_cats  = st.multiselect("Categories", CATEGORIES, default=CATEGORIES)
-    min_score      = st.slider("Min score (0–100)", 0, 100, 20,
-                                help="Lower = more articles. 20+ catches general market news. 60+ = high confidence only.")
+    min_score      = st.slider("Min score (0–100)", 0, 100, 30,
+                                help="Recommended: 30+ to catch all relevant articles")
     show_discard   = st.checkbox("Show discarded articles", value=False)
     show_breakdown = st.checkbox("Show score breakdown", value=False)
 
